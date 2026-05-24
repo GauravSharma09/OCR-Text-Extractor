@@ -1,0 +1,40 @@
+# ─────────────────────────────────────────────
+# OCR Text Extractor — Python Dependencies
+# Install with: pip install -r requirements.txt
+# ─────────────────────────────────────────────
+
+# ── Core OCR Engine (no Tesseract needed!) ──
+easyocr>=1.7.1
+
+# ── Image Processing ──
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# ── Web UI ──
+streamlit>=1.35.0
+
+# ── PDF Input Support ──
+pdf2image>=1.17.0       # Converts PDF pages to images
+# NOTE: Also requires Poppler for Windows.
+# Download from: https://github.com/oschwartz10612/poppler-windows/releases
+# Extract and add the `bin/` folder to your PATH.
+
+# ── PDF Export ──
+fpdf2>=2.7.9            # Lightweight PDF generation
+
+# ── Scientific Stack (EasyOCR dependency) ──
+numpy>=1.24.0
+torch>=2.0.0            # PyTorch — EasyOCR backend (CPU version shown below)
+torchvision>=0.15.0
+
+# ─────────────────────────────────────────────
+# INSTALLATION NOTES
+# ─────────────────────────────────────────────
+# CPU-only PyTorch (smaller download, Windows):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#
+# GPU PyTorch (CUDA 11.8):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#
+# Then install the rest:
+#   pip install -r requirements.txt

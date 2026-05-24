@@ -1,0 +1,20 @@
+{
+  // VS Code launch config — run Streamlit app with F5
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run OCR App (Streamlit)",
+      "type": "python",
+      "request": "launch",
+      "module": "streamlit",
+      "args": [
+        "run",
+        "${workspaceFolder}/app.py",
+        "--server.port=8501",
+        "--browser.gatherUsageStats=false"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}
