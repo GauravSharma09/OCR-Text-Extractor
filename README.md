@@ -99,7 +99,7 @@ streamlit run app.py
 
 ## Author
 
-Prachi Golia
+Prachi Golia | Gaurav Sharma
 
 ## License
 
