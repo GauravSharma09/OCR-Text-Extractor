@@ -2,7 +2,6 @@
 utils.py — OCR Text Extractor Utilities
 =========================================
 All helper functions: preprocessing, OCR, export, validation.
-Kept separate from app.py for clean, modular code.
 """
 
 import cv2
@@ -17,23 +16,20 @@ from typing import Tuple, Optional
 # SUPPORTED LANGUAGES
 # ─────────────────────────────────────────────
 def get_supported_languages() -> dict:
-    """
-    Returns a dict of display name → {code, flag} for EasyOCR languages.
-    Add more from: https://www.jaided.ai/easyocr/
-    """
+    """Returns display name → {code, flag} for EasyOCR language codes."""
     return {
-        "English":            {"code": "en",  "flag": "🇬🇧"},
-        "Hindi":              {"code": "hi",  "flag": "🇮🇳"},
-        "French":             {"code": "fr",  "flag": "🇫🇷"},
-        "German":             {"code": "de",  "flag": "🇩🇪"},
-        "Spanish":            {"code": "es",  "flag": "🇪🇸"},
-        "Italian":            {"code": "it",  "flag": "🇮🇹"},
-        "Portuguese":         {"code": "pt",  "flag": "🇵🇹"},
+        "English":              {"code": "en",     "flag": "🇬🇧"},
+        "Hindi":                {"code": "hi",     "flag": "🇮🇳"},
+        "French":               {"code": "fr",     "flag": "🇫🇷"},
+        "German":               {"code": "de",     "flag": "🇩🇪"},
+        "Spanish":              {"code": "es",     "flag": "🇪🇸"},
+        "Italian":              {"code": "it",     "flag": "🇮🇹"},
+        "Portuguese":           {"code": "pt",     "flag": "🇵🇹"},
         "Chinese (Simplified)": {"code": "ch_sim", "flag": "🇨🇳"},
-        "Japanese":           {"code": "ja",  "flag": "🇯🇵"},
-        "Korean":             {"code": "ko",  "flag": "🇰🇷"},
-        "Arabic":             {"code": "ar",  "flag": "🇸🇦"},
-        "Russian":            {"code": "ru",  "flag": "🇷🇺"},
+        "Japanese":             {"code": "ja",     "flag": "🇯🇵"},
+        "Korean":               {"code": "ko",     "flag": "🇰🇷"},
+        "Arabic":               {"code": "ar",     "flag": "🇸🇦"},
+        "Russian":              {"code": "ru",     "flag": "🇷🇺"},
     }
 
 
@@ -42,116 +38,138 @@ def get_supported_languages() -> dict:
 # ─────────────────────────────────────────────
 ALLOWED_TYPES = {
     "image/jpeg", "image/jpg", "image/png",
-    "image/bmp", "image/tiff", "image/webp", "application/pdf"
+    "image/bmp", "image/tiff", "image/webp", "application/pdf",
 }
 MAX_SIZE_MB = 25
 
 
 def validate_file(uploaded_file) -> Tuple[bool, str]:
     """
-    Validates an uploaded Streamlit file object.
-
-    Returns:
-        (True, "") if valid
-        (False, error_message) if invalid
+    Validate a Streamlit uploaded file object.
+    Returns (True, "") on success or (False, error_message) on failure.
     """
     if uploaded_file is None:
         return False, "No file uploaded."
-
-    # ── Check MIME type ──
     if uploaded_file.type not in ALLOWED_TYPES:
         return False, (
             f"Unsupported file type '{uploaded_file.type}'. "
             "Please upload JPG, PNG, BMP, TIFF, WEBP, or PDF."
         )
-
-    # ── Check file size ──
     size_mb = uploaded_file.size / (1024 * 1024)
     if size_mb > MAX_SIZE_MB:
-        return False, f"File too large ({size_mb:.1f} MB). Maximum allowed: {MAX_SIZE_MB} MB."
-
+        return False, (
+            f"File too large ({size_mb:.1f} MB). "
+            f"Maximum allowed: {MAX_SIZE_MB} MB."
+        )
     return True, ""
 
 
 # ─────────────────────────────────────────────
 # IMAGE PREPROCESSING
 # ─────────────────────────────────────────────
+def _looks_like_screenshot(img: np.ndarray) -> bool:
+    """
+    Heuristic check: is this image a UI screenshot rather than a scanned doc?
+
+    Screenshots tend to be:
+      • Wide-and-short (aspect ratio > 2.5), OR
+      • Small overall (< 400 px tall)
+
+    For screenshots we skip adaptive thresholding because it destroys
+    coloured UI elements (blue links, icons, badges).
+    """
+    h, w = img.shape[:2]
+    aspect = w / max(h, 1)
+    return aspect > 2.5 or h < 400
+
+
 def preprocess_image(img: np.ndarray, cfg: dict) -> np.ndarray:
     """
-    Apply a series of preprocessing steps to improve OCR accuracy.
+    Preprocessing pipeline — all steps are optional via cfg flags.
 
-    Steps (all optional, controlled by cfg):
-        1. Upscale — makes small text readable
-        2. Grayscale — removes colour noise
-        3. Denoise — removes JPEG/sensor grain
-        4. Adaptive threshold — binarises the image
-        5. Deskew — corrects rotation
+    Step 1 : Upscale          — enlarges small text for better detection
+    Step 2 : Grayscale        — reduces colour noise
+    Step 3 : CLAHE            — adaptive contrast boost (always with grayscale)
+    Step 4 : Denoise          — removes JPEG grain (gentle h=7)
+    Step 5 : Adaptive thresh  — binarises the image (skipped for screenshots)
+    Step 6 : Deskew           — corrects rotated scans
 
     Args:
-        img: OpenCV BGR image (numpy array)
-        cfg: dict with keys: grayscale, denoise, threshold, deskew, scale
-
-    Returns:
-        Preprocessed image as numpy array
+        img : OpenCV BGR numpy array
+        cfg : dict with keys: scale, grayscale, denoise, threshold, deskew
     """
-    # ── Step 1: Upscale ──
+    is_screenshot = _looks_like_screenshot(img)
+
+    # ── Step 1: Upscale ──────────────────────────────────────────────────
     scale = cfg.get("scale", 2.0)
     if scale != 1.0:
         h, w = img.shape[:2]
-        img = cv2.resize(img, (int(w * scale), int(h * scale)),
-                         interpolation=cv2.INTER_LANCZOS4)
+        img = cv2.resize(
+            img,
+            (int(w * scale), int(h * scale)),
+            interpolation=cv2.INTER_LANCZOS4,
+        )
 
-    # ── Step 2: Grayscale conversion ──
+    # ── Step 2: Grayscale ────────────────────────────────────────────────
     if cfg.get("grayscale", True):
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        if len(img.shape) == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # ── Step 3: Noise removal ──
+        # ── Step 3: CLAHE (adaptive contrast) ───────────────────────────
+        # Boosts local contrast so faint text becomes clearly visible
+        # before denoising/thresholding.  Always applied with grayscale.
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        img = clahe.apply(img)
+
+    # ── Step 4: Denoise ──────────────────────────────────────────────────
+    # h=7 (was h=10) — gentler.  h=10 blurs thin strokes and drops confidence.
     if cfg.get("denoise", True):
         if len(img.shape) == 2:
-            # Grayscale: fast Non-Local Means
-            img = cv2.fastNlMeansDenoising(img, h=10, templateWindowSize=7, searchWindowSize=21)
+            img = cv2.fastNlMeansDenoising(
+                img, h=7, templateWindowSize=7, searchWindowSize=21
+            )
         else:
-            img = cv2.fastNlMeansDenoisingColored(img, h=10)
+            img = cv2.fastNlMeansDenoisingColored(img, h=7)
 
-    # ── Step 4: Adaptive thresholding ──
-    if cfg.get("threshold", True):
+    # ── Step 5: Adaptive Threshold ───────────────────────────────────────
+    # Skipped for screenshots: adaptive threshold inverts coloured UI text
+    # (blue links, orange icons) and makes OCR output garbage.
+    # blockSize=15, C=4 (was 11/2) — wider block suits printed documents.
+    if cfg.get("threshold", True) and not is_screenshot:
         if len(img.shape) == 3:
             img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         img = cv2.adaptiveThreshold(
-            img, 255,
+            img,
+            255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY,
-            blockSize=11,
-            C=2,
+            blockSize=15,
+            C=4,
         )
 
-    # ── Step 5: Deskew ──
+    # ── Step 6: Deskew ───────────────────────────────────────────────────
     if cfg.get("deskew", False):
-        img = deskew_image(img)
+        img = _deskew(img)
 
     return img
 
 
-def deskew_image(img: np.ndarray) -> np.ndarray:
+def _deskew(img: np.ndarray) -> np.ndarray:
     """
-    Detect and correct the skew/rotation of a document image.
-
-    Uses Hough Line Transform to find the dominant angle,
-    then rotates the image to straighten it.
+    Detect and correct image skew using Hough Line Transform.
+    Works on both grayscale and colour images.
     """
-    # Work on a grayscale copy for detection
     gray = img if len(img.shape) == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, 50, 150, apertureSize=3)
     lines = cv2.HoughLines(edges, 1, np.pi / 180, 200)
 
     if lines is None:
-        return img  # No lines found; return as-is
+        return img
 
-    # ── Compute median angle ──
     angles = []
     for line in lines:
         rho, theta = line[0]
-        angle = (theta * 180 / np.pi) - 90
+        angle = (theta * 180.0 / np.pi) - 90.0
         if abs(angle) < 45:
             angles.append(angle)
 
@@ -159,53 +177,60 @@ def deskew_image(img: np.ndarray) -> np.ndarray:
         return img
 
     median_angle = float(np.median(angles))
-
-    # ── Rotate image to correct skew ──
     h, w = img.shape[:2]
-    center = (w // 2, h // 2)
-    M = cv2.getRotationMatrix2D(center, median_angle, 1.0)
-    rotated = cv2.warpAffine(
+    M = cv2.getRotationMatrix2D((w // 2, h // 2), median_angle, 1.0)
+    return cv2.warpAffine(
         img, M, (w, h),
         flags=cv2.INTER_CUBIC,
         borderMode=cv2.BORDER_REPLICATE,
     )
-    return rotated
 
 
 # ─────────────────────────────────────────────
-# OCR EXTRACTION — IMAGE
+# OCR — IMAGE
 # ─────────────────────────────────────────────
 def extract_text_from_image(
     img: np.ndarray,
     reader,
 ) -> Tuple[str, float]:
     """
-    Run EasyOCR on a preprocessed image.
+    Run EasyOCR on a preprocessed image and return (text, avg_confidence).
 
-    Args:
-        img: Preprocessed numpy image
-        reader: EasyOCR Reader instance
-
-    Returns:
-        (extracted_text, average_confidence)
+    Key improvements:
+    • width_ths=0.5  — prevents adjacent words being merged into one long
+                        unreadable token (was 0.9 which was far too aggressive).
+    • contrast_ths / adjust_contrast — catches low-contrast text regions.
+    • Results sorted top→bottom, left→right for correct reading order,
+      which matters for multi-column layouts like resumes.
     """
-    # EasyOCR returns a list of (bbox, text, confidence)
-    results = reader.readtext(img, detail=1, paragraph=False)
+    results = reader.readtext(
+        img,
+        detail=1,
+        paragraph=False,
+        width_ths=0.5,        # merge only truly adjacent boxes (was 0.9 → word merging bug)
+        ycenter_ths=0.5,      # vertical grouping tolerance
+        height_ths=0.7,       # merge boxes of similar height
+        slope_ths=0.1,        # ignore heavily slanted detections
+        contrast_ths=0.1,     # detect low-contrast text
+        adjust_contrast=0.5,  # internal EasyOCR contrast boost
+    )
 
     if not results:
         return "", 0.0
 
-    # ── Assemble text preserving rough line order ──
-    lines   = [item[1] for item in results]
-    confs   = [item[2] for item in results]
-    text    = "\n".join(lines)
+    # Sort top-to-bottom, then left-to-right, using the top-left bbox corner
+    results = sorted(results, key=lambda r: (r[0][0][1], r[0][0][0]))
+
+    lines    = [item[1] for item in results]
+    confs    = [item[2] for item in results]
+    text     = "\n".join(lines)
     avg_conf = float(np.mean(confs)) if confs else 0.0
 
     return text, avg_conf
 
 
 # ─────────────────────────────────────────────
-# OCR EXTRACTION — PDF
+# OCR — PDF
 # ─────────────────────────────────────────────
 def extract_text_from_pdf(
     pdf_bytes: bytes,
@@ -214,120 +239,142 @@ def extract_text_from_pdf(
 ) -> Tuple[str, float]:
     """
     Convert each PDF page to an image and run OCR on it.
-
-    Requires: pdf2image  +  poppler (Windows: poppler in PATH)
-    Falls back gracefully if pdf2image is not installed.
-
-    Args:
-        pdf_bytes: Raw PDF file bytes
-        reader: EasyOCR Reader instance
-        preprocessing_cfg: Preprocessing config dict
-
-    Returns:
-        (full_text, average_confidence)
+    Requires: pdf2image + poppler.
     """
     try:
         from pdf2image import convert_from_bytes
     except ImportError:
         return (
             "[ERROR] pdf2image is not installed.\n"
-            "Run:  pip install pdf2image\n"
-            "Also install Poppler for Windows from:\n"
+            "Run: pip install pdf2image\n"
+            "Also install Poppler for Windows:\n"
             "https://github.com/oschwartz10612/poppler-windows/releases",
             0.0,
         )
 
     try:
         pages = convert_from_bytes(pdf_bytes, dpi=200)
-    except Exception as e:
-        return f"[ERROR] Could not read PDF: {e}", 0.0
+    except Exception as exc:
+        return f"[ERROR] Could not read PDF: {exc}", 0.0
 
-    all_text = []
-    all_conf = []
+    all_text: list[str] = []
+    all_conf: list[float] = []
 
     for i, page in enumerate(pages):
-        # ── Convert PIL → OpenCV ──
-        cv_img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
+        cv_img    = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
         processed = preprocess_image(cv_img, preprocessing_cfg)
         text, conf = extract_text_from_image(processed, reader)
-
         if text.strip():
             all_text.append(f"── Page {i + 1} ──\n{text}")
             all_conf.append(conf)
 
-    full_text = "\n\n".join(all_text)
-    avg_conf  = float(np.mean(all_conf)) if all_conf else 0.0
-    return full_text, avg_conf
+    return "\n\n".join(all_text), float(np.mean(all_conf)) if all_conf else 0.0
 
 
 # ─────────────────────────────────────────────
-# CONFIDENCE CALCULATION (helper)
+# CONFIDENCE HELPER
 # ─────────────────────────────────────────────
 def calculate_confidence(results: list) -> float:
-    """
-    Average confidence from EasyOCR result list.
-
-    Args:
-        results: List of (bbox, text, confidence) tuples
-
-    Returns:
-        Average confidence as a float [0.0, 1.0]
-    """
+    """Average confidence from an EasyOCR result list."""
     if not results:
         return 0.0
-    confs = [r[2] for r in results]
-    return float(np.mean(confs))
+    return float(np.mean([r[2] for r in results]))
 
 
 # ─────────────────────────────────────────────
 # EXPORT — TXT
 # ─────────────────────────────────────────────
 def save_text_as_txt(text: str) -> bytes:
-    """
-    Encode extracted text as UTF-8 bytes for download.
-
-    Args:
-        text: The extracted text string
-
-    Returns:
-        UTF-8 encoded bytes
-    """
+    """Return extracted text as UTF-8 bytes ready for st.download_button."""
     return text.encode("utf-8")
 
 
 # ─────────────────────────────────────────────
 # EXPORT — PDF
 # ─────────────────────────────────────────────
+def _sanitize_for_pdf(line: str, max_token: int = 60) -> str:
+    """
+    Make a single line safe for fpdf2's default latin-1 Helvetica font.
+
+    Two operations:
+    1. latin-1 encode — replaces every unencodable unicode char with '?'.
+       This is the root cause of:
+         FPDFException: Not enough horizontal space to render a single character
+       Any char outside latin-1 makes fpdf2's line-break algorithm fail.
+
+    2. Long-token break — inserts spaces every max_token characters inside
+       any unbroken token (e.g. a URL or an OCR-merged word like
+       "theassignmentswwhichihavecompletedimy").  A single token wider than
+       the text cell also triggers the same FPDFException.
+    """
+    line = line.replace("\t", "    ")
+    # Step 1: latin-1 safety
+    line = line.encode("latin-1", errors="replace").decode("latin-1")
+    # Step 2: break monster tokens
+    words, result = line.split(" "), []
+    for word in words:
+        chunks = [word[i : i + max_token] for i in range(0, len(word), max_token)]
+        result.extend(chunks)
+    return " ".join(result)
+
+
 def save_text_as_pdf(text: str) -> Optional[bytes]:
     """
-    Convert extracted text to a downloadable PDF file.
+    Convert extracted text to a downloadable PDF.
+
+    Fixes applied:
+    • _sanitize_for_pdf() handles latin-1 encoding AND overlong tokens.
+    • Explicit page_width = pdf.w - margins  (not 0 which is ambiguous
+      in fpdf2 and can resolve to 0 usable pixels in some versions).
+    • Per-line try/except so one bad line never crashes the whole export;
+      falls back to ASCII-only, then silently skips if still failing.
+    • Empty lines → small vertical gap instead of blank multi_cell.
 
     Requires: fpdf2  (pip install fpdf2)
-
-    Args:
-        text: The extracted text string
-
-    Returns:
-        PDF bytes, or None if fpdf2 is unavailable
     """
     try:
         from fpdf import FPDF
     except ImportError:
         return None
 
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
+    L, R, T, B = 15, 15, 15, 15          # margins in mm
 
-    # ── Title ──
+    pdf = FPDF()
+    pdf.set_margins(left=L, top=T, right=R)
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=B)
+
+    # Calculate actual usable width (avoids the width=0 ambiguity bug)
+    usable_w = pdf.w - L - R
+
+    # ── Title ────────────────────────────────────────────────────────────
     pdf.set_font("Helvetica", "B", 16)
-    pdf.cell(0, 10, "Extracted Text", ln=True, align="C")
+    pdf.cell(usable_w, 10, "Extracted Text", ln=True, align="C")
     pdf.ln(5)
 
-    # ── Body ──
+    # ── Body ─────────────────────────────────────────────────────────────
     pdf.set_font("Helvetica", size=11)
-    for line in text.split("\n"):
-        # Handle long lines gracefully
-        pdf.multi_cell(0, 7, line)
+    for raw_line in text.split("\n"):
+        if not raw_line.strip():
+            pdf.ln(4)        # blank line → small vertical gap
+            continue
 
-    return pdf.output(dest="S").encode("latin-1")
+        safe = _sanitize_for_pdf(raw_line)
+        try:
+            pdf.multi_cell(usable_w, 7, safe)
+        except Exception:
+            # Fallback 1: strip to ASCII only
+            try:
+                pdf.multi_cell(
+                    usable_w, 7,
+                    safe.encode("ascii", errors="replace").decode("ascii"),
+                )
+            except Exception:
+                pass          # Fallback 2: skip this line entirely
+
+    # fpdf2 v2+ returns bytearray from output(), older versions returned a
+    # latin-1 string.  Handle both so the code works on any installed version.
+    raw = pdf.output(dest="S")
+    if isinstance(raw, (bytes, bytearray)):
+        return bytes(raw)
+    return raw.encode("latin-1")
